@@ -1,13 +1,48 @@
-DICT_ASCII_START: int = ord("A")
-MAX_CHUNK_SIZE: int = 1000
+ENCODING: str = "utf-8"
+
+
+def byte_to_int(
+    byte: bytes,
+) -> int | list[int]:
+    assert len(byte) > 0
+    if len(byte) == 1:
+        return int(byte.hex(), base=16)
+    if len(byte) > 1:
+        return [int(byte_.hex(), base=16) for byte_ in byte]
+
+
+def int_to_byte(
+    integer: int | list[int],
+) -> bytes:
+    if isinstance(integer, int):
+        return bytes([integer])
+    if isinstance(integer, list):
+        return bytes(integer)
+
+
+def string_to_bytes(
+    string: str,
+) -> bytes:
+    return bytes(string, encoding=ENCODING)
+
+
+def bytes_to_string(
+    bytes_: bytes,
+) -> str:
+    assert bytes_.isascii()
+    return bytes_.decode(encoding=ENCODING)
+
+
+DICT_BYTE_START: int = byte_to_int(b"!")
+MAX_BYTE_RANGE: int = 255 - DICT_BYTE_START
 
 from dataclasses import dataclass
 
 
 @dataclass
 class KeyMap:
-    key: str | None = None
-    charpair: str | None = None
+    key: bytes | None = None
+    charpair: bytes | None = None
 
     @property
     def is_empty(self):
@@ -47,7 +82,7 @@ class SizeLog:
         return self.size_chunk + self.size_keymap
 
 
-def chunk_pz_once(chunk: str) -> tuple[str, KeyMap]:
+def chunk_pz_once(chunk: bytes) -> tuple[bytes, KeyMap]:
     """Compress a chunk of string for one iteration.
     1. Find the most frequent char-pair, e.g. xx;
     2. Find a not-used char as key, e.g. A;
@@ -62,16 +97,15 @@ def chunk_pz_once(chunk: str) -> tuple[str, KeyMap]:
     """
 
     n_chars: int = len(chunk)
-    assert n_chars < MAX_CHUNK_SIZE
-    counter: dict[str, int] = dict()
-    max_freq: tuple[int, str] = (0, "")
-    chars_unique: set[str] = set()
+    counter: dict[bytes, int] = dict()
+    max_freq: tuple[int, bytes] = (0, b"")
+    chars_unique: set[bytes] = set()
     for iloc_cpair in range(n_chars - 1):
         # str: 1234567  n_chars=7
         # idx: 0123456
         #           ^   last possible iloc
-        cpair: str = chunk[iloc_cpair : iloc_cpair + 2]
-        chars_unique.add(chunk[iloc_cpair])
+        cpair: bytes = chunk[iloc_cpair : iloc_cpair + 2]
+        chars_unique.add(chunk[iloc_cpair : iloc_cpair + 1])
         if cpair not in counter:
             counter[cpair] = 1
         else:
@@ -80,13 +114,13 @@ def chunk_pz_once(chunk: str) -> tuple[str, KeyMap]:
             max_freq = (counter[cpair], cpair)
     if max_freq[0] <= 2:
         keymap = KeyMap()
-        chuck_replaced: str = chunk
+        chuck_replaced: bytes = chunk
     else:
-        for ascii_key in range(DICT_ASCII_START, DICT_ASCII_START + MAX_CHUNK_SIZE + 1):
-            if chr(ascii_key) in chars_unique:
+        for byte_key in range(DICT_BYTE_START, DICT_BYTE_START + MAX_BYTE_RANGE + 1):
+            if int_to_byte(byte_key) in chars_unique:
                 continue
-            key: str = chr(ascii_key)
-        chuck_replaced: str = chunk.replace(max_freq[1], key)
+            key: bytes = int_to_byte(byte_key)
+        chuck_replaced: bytes = chunk.replace(max_freq[1], key)
         keymap = KeyMap(
             key=key,
             charpair=max_freq[1],
@@ -99,10 +133,10 @@ def chunk_pz_once(chunk: str) -> tuple[str, KeyMap]:
 
 
 def chunk_pz_till_converge(
-    chunk: str,
+    chunk: bytes,
     max_iter: int = 100_000,
     verbose: bool = True,
-) -> tuple[str, OrderedKeyMap]:
+) -> tuple[bytes, OrderedKeyMap]:
     """Compresses a string chunk to minimal size, including keymap size.
 
     Returns:
@@ -136,12 +170,15 @@ def chunk_pz_till_converge(
 
 
 def decompress_chunk_pz(
-    chunk: str,
+    chunk: bytes,
     orderedkeymap: OrderedKeyMap,
-) -> str:
+) -> bytes:
     if orderedkeymap.is_empty:
+        assert chunk.isascii()
         return chunk
     for keymap in orderedkeymap.order[::-1]:
+        if keymap.is_empty:
+            continue
         chunk = chunk.replace(keymap.key, keymap.charpair)
     return chunk
 
@@ -149,11 +186,11 @@ def decompress_chunk_pz(
 @dataclass
 class FormatChar:
     length: int = 1
-    ascii: int = DICT_ASCII_START
+    byte: int = DICT_BYTE_START
 
 
 def find_format_char_for_strings(
-    strings: list[str],
+    strings: list[bytes],
 ) -> FormatChar:
     """Find an ascii (exclusing RET, i.e., '\n') that does not appear in any of the strings given,
     if cannot find one, then startover and repeat itself once so that the fchar becomes
@@ -167,13 +204,13 @@ def find_format_char_for_strings(
     fchar = FormatChar()
     while True:
         for string in strings:
-            if (chr(fchar.ascii) * fchar.length in string) or (
-                chr(fchar.ascii) == "\n"
+            if (int_to_byte(fchar.byte) * fchar.length in string) or (
+                int_to_byte(fchar.byte) == b"\n"
             ):
-                if fchar.ascii < DICT_ASCII_START + MAX_CHUNK_SIZE:
-                    fchar.ascii += 1
+                if fchar.byte < DICT_BYTE_START + MAX_BYTE_RANGE - 1:
+                    fchar.byte += 1
                 else:
-                    fchar.ascii = DICT_ASCII_START
+                    fchar.byte = DICT_BYTE_START
                     fchar.length += 1
                 break  # break for loop
         else:  # Found one!
@@ -182,9 +219,9 @@ def find_format_char_for_strings(
 
 
 def chunk_pz_format_string(
-    chunks: list[str],
+    chunks: list[bytes],
     orderedkeymaps: list[OrderedKeyMap],
-) -> str:
+) -> bytes:
     """Generate pz format string.
     1. Find a seperator format char (excluding RET '\n'), e.g., A.;
     2. Format compressed chunk like this:
@@ -192,37 +229,49 @@ def chunk_pz_format_string(
     (line 1 for format char) A
     (line 2 and hereafter) AkcpxyzabcijkAcompressedtextAkcpxyzabcAanothertext
     first A: mark of key-cpair in a row, e.g., k is key, cp is cpair, and x is key,
-    yz is cpair, ..., corresponding to decoding order;
+    yz is cpair, ..., corresponding to encoding order;
     next A: mark of corresponding compressed text;
     further A's: mark of next chunk, and so on ...
     """
-    result: str = ""
+    result: bytes = b""
     fcharinfo: FormatChar = find_format_char_for_strings(strings=chunks)
-    fchar: str = chr(fcharinfo.ascii) * fcharinfo.length
-    result += f"{fchar}\n"
+    fchar: bytes = int_to_byte(fcharinfo.byte) * fcharinfo.length
+    result += fchar + b"\n"
     for i in range(len(chunks)):
         if orderedkeymaps[i].is_empty:
-            result += f"{fchar}{fchar}{chunks[i]}"
+            result += fchar + fchar + chunks[i]
             continue
         # Build keymaps
-        result += f"{fchar}"
-        for keymap in orderedkeymaps[i].order[::-1]:
+        result += fchar
+        for keymap in orderedkeymaps[i].order:
             result += keymap.key
             result += keymap.charpair
         # Build text
-        result += f"{fchar}{chunks[i]}"
+        result += fchar + chunks[i]
     return result
 
 
-def io_compress_to_string(
-    filepath: str,
+def compress_to_string(
+    chunks: list[bytes],
     verbose: bool = True,
-) -> str:
-    chunks: list[str] = []
-    with open(filepath, "r") as fi:
-        while True:
-            chunks.append(fi.read(MAX_CHUNK_SIZE))
-    compressed_chunks: list[str] = []
+) -> bytes:
+    # chunks: list[bytes] = []
+    # with open(filepath, "rb") as fi:
+    #     read_string: bytes = b""
+    #     read_string_set: set[bytes] = set()
+    #     while True:
+    #         this_char = fi.read(2)
+    #         read_string_set.add(this_char)
+    #         read_string += this_char
+    #         if len(read_string_set) >= MAX_BYTE_RANGE - 3 or this_char == b"":
+    #             read_string_set = set()
+    #             chunks.append(read_string)
+    #             read_string = b""
+    #         if this_char == b"":
+    #             break
+    # if verbose:
+    #     print("Done reading.")
+    compressed_chunks: list[bytes] = []
     keymaps: list[OrderedKeyMap] = []
     for chunk in chunks:
         chunk_compressed, keymap = chunk_pz_till_converge(
@@ -232,34 +281,111 @@ def io_compress_to_string(
         compressed_chunks.append(chunk_compressed)
         keymaps.append(keymap)
     return chunk_pz_format_string(
-        chunks=chunks,
+        chunks=compressed_chunks,
         orderedkeymaps=keymaps,
     )
 
 
-def io_compress(
+def io_compress_to_string(
     filepath: str,
-) -> None:
-    """Print to stdout."""
-    print(
-        io_compress_to_string(
-            filepath=filepath,
-            verbose=False,
-        )
+    verbose: bool = True,
+) -> bytes:
+    chunks: list[bytes] = []
+    with open(filepath, "rb") as fi:
+        read_string: bytes = b""
+        read_string_set: set[bytes] = set()
+        while True:
+            this_char = fi.read(2)
+            read_string_set.add(this_char)
+            read_string += this_char
+            if len(read_string_set) >= MAX_BYTE_RANGE - 3 or this_char == b"":
+                read_string_set = set()
+                chunks.append(read_string)
+                read_string = b""
+            if this_char == b"":
+                break
+    if verbose:
+        print("Done reading.")
+    return compress_to_string(
+        chunks=chunks,
+        verbose=verbose,
     )
-    return
+
+
+# def io_compress(
+#     filepath: str,
+# ) -> None:
+#     """Print to stdout."""
+#     print(
+#         io_compress_to_string(
+#             filepath=filepath,
+#             verbose=False,
+#         )
+#     )
+#     return
+
+
+def is_even(integer: int) -> bool:
+    return integer % 2 == 0
+
+
+def read_orderedkeymap_from_string(keymap_string: bytes) -> OrderedKeyMap:
+    assert len(keymap_string) % 3 == 0
+    n_keymaps: int = len(keymap_string) // 3
+    orderedkeymap: OrderedKeyMap = OrderedKeyMap()
+    for i_keymap in range(n_keymaps):
+        key: bytes = keymap_string[i_keymap * 3 : i_keymap * 3 + 1]
+        charpair: bytes = keymap_string[i_keymap * 3 + 1 : i_keymap * 3 + 3]
+        orderedkeymap.add_keymap(
+            keymap=KeyMap(
+                key=key,
+                charpair=charpair,
+            ),
+        )
+    return orderedkeymap
+
+
+def decompress_to_string(
+    string_formatted: bytes,
+) -> bytes:
+    fchar: bytes = b""
+    string: bytes = b""
+    iloc_string_start: int = 0
+    # Parse fchar
+    for iloc, _ in enumerate(string_formatted):
+        char: bytes = string_formatted[iloc : iloc + 1]
+        if char == b"\n":
+            iloc_string_start = iloc + 1
+            break
+        else:
+            fchar += char
+
+    # Parse keymap and chunks
+    string_formatted = string_formatted[iloc_string_start:]
+    fields: list[bytes] = string_formatted.split(fchar)[
+        1:
+    ]  # Drop the first empty string
+    assert is_even(len(fields))
+    n_parts: int = len(fields) // 2
+    for i_part in range(n_parts):
+        keymap_string: bytes = fields[i_part * 2]
+        chunk_string: bytes = fields[i_part * 2 + 1]
+        keymap: OrderedKeyMap = read_orderedkeymap_from_string(
+            keymap_string=keymap_string
+        )
+        string += decompress_chunk_pz(
+            chunk=chunk_string,
+            orderedkeymap=keymap,
+        )
+    return string
 
 
 def io_decompress_to_string(
-    string_formatted: str,
-) -> str:
-    pass
-
-
-def io_decompress(
-    string_formatted: str,
-) -> None:
-    pass
+    filepath: str,
+) -> bytes:
+    with open(filepath, "rb") as fi:
+        string_formatted: bytes = fi.read()
+    return decompress_to_string(string_formatted=string_formatted)
 
 
 if __name__ == "__main__":
@@ -268,3 +394,46 @@ if __name__ == "__main__":
     parser = ArgumentParser(
         description="Compress/Decompress a text file using char-pair",
     )
+    parser.add_argument(
+        "filepath",
+        help="Path of text file to compress/decompress.",
+    )
+    parser.add_argument(
+        "-d",
+        "--decompress",
+        help="Decompression mode. (Program defaults to compression mode.)",
+        action="store_true",
+        default=False,
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        help="Specify path of output text.",
+        required=True,
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        help="Print verbose information.",
+        action="store_true",
+        default=False,
+    )
+    args = parser.parse_args()
+    filepath: str = args.filepath
+    decompress: bool = args.decompress
+    output: str = args.output
+    verbose: bool = args.verbose
+
+    if not decompress:
+        result: bytes = io_compress_to_string(
+            filepath=filepath,
+            verbose=True,
+        )
+        with open(output, "wb") as fo:
+            fo.write(result)
+    else:
+        result: bytes = io_decompress_to_string(
+            filepath=filepath,
+        )
+        with open(output, "wb") as fo:
+            fo.write(result)
