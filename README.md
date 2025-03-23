@@ -6,7 +6,7 @@
 ```Bash
 $ cd ~
 $ git clone https://github.com/LIU-Xnd/pz.git
-$ export pz='python ~/pz/src/pz.py'
+$ export pz() { python ~/pz/src/pz.py $@; }
 ```
 For help, see
 ```Bash
